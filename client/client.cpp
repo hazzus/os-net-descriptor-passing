@@ -27,9 +27,15 @@ client::client(std::string const& path) {
 
     in = std::move(open(response.substr(0, limiter).c_str(), O_RDONLY));
     out = std::move(open(response.substr(limiter + 2).c_str(), O_WRONLY));
+    if (in.bad() || out.bad()) {
+        throw client_exception("Bad descriptors passed");
+    }
 }
 
 std::string client::request(std::string const& data) {
+    if (in.bad() || out.bad()) {
+        throw client_exception("Bad descriptors passed");
+    }
     ssize_t was_written = write(out.get_fd(), data.c_str(), data.size());
     if (was_written == -1) {
         throw client_exception("Error on reading responce");
