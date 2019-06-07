@@ -18,35 +18,40 @@ client::client(std::string const& path) {
         throw client_exception("Unable to connect to server");
     }
 
-    std::vector<char> buffer(BUFFER_SIZE);
-    if (read(socket_fd.get_fd(), buffer.data(), BUFFER_SIZE) == -1) {
+    accumulator acc;
+    auto got = acc.read_fully(socket_fd.get_fd(), BUFFER_SIZE);
+    if (got.first == -1) {
         throw client_exception("No response on connection");
     }
-    std::string response(buffer.data());
-    std::size_t limiter = response.find("\r\n");
+    std::size_t limiter = got.second.find("||");
 
-    in = std::move(open(response.substr(0, limiter).c_str(), O_RDONLY));
-    out = std::move(open(response.substr(limiter + 2).c_str(), O_WRONLY));
+    in = std::move(open(got.second.substr(0, limiter).c_str(), O_RDONLY));
+    out = std::move(open(got.second.substr(limiter + 2).c_str(), O_WRONLY));
     if (in.bad() || out.bad()) {
         throw client_exception("Bad descriptors passed");
     }
 }
 
-std::string client::request(std::string const& data) {
+std::string client::request(std::string data) {
+    accumulator acc;
+    data += "\r\n";
     if (in.bad() || out.bad()) {
         throw client_exception("Bad descriptors passed");
     }
-    ssize_t was_written = write(out.get_fd(), data.c_str(), data.size());
-    if (was_written == -1) {
+    size_t was_written = 0;
+    while (was_written < data.size()) {
+        ssize_t current = write(out.get_fd(), data.data() + was_written,
+                                data.size() - was_written);
+        if (current == -1) {
+            throw client_exception("Error on reading responce");
+        }
+        was_written += static_cast<size_t>(current);
+    }
+    auto got = acc.read_fully(in.get_fd(), BUFFER_SIZE);
+    if (got.first == -1) {
         throw client_exception("Error on reading responce");
     }
-    std::vector<char> buffer(BUFFER_SIZE);
-    ssize_t was_read = read(in.get_fd(), buffer.data(), BUFFER_SIZE);
-    if (was_read == -1) {
-        throw client_exception("Error on reading responce");
-    }
-    buffer.resize(static_cast<size_t>(was_read));
-    return std::string(buffer.data());
+    return got.second;
 }
 
 client::~client() { request("disconnect"); }

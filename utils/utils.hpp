@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <fcntl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -42,6 +43,52 @@ struct fd_wrapper {
     int fd;
 };
 
+struct accumulator {
+    accumulator() = default;
+
+    std::string next() {
+        size_t end = data.find("\r\n");
+        if (end == std::string::npos) {
+            return "";
+        }
+        std::string res = data.substr(0, end);
+        data = data.substr(end + 2);
+        return res;
+    }
+
+    void insert(std::string const& n) { data += n; }
+
+    std::pair<int, std::string> read_fully(int const& fd,
+                                           size_t const BUFF_SIZE) {
+        int result = 0;
+        std::string res;
+        while (true) {
+            std::string cur;
+            res = next();
+            if (!res.empty()) {
+                break;
+            }
+            std::vector<char> buffer(BUFF_SIZE);
+            ssize_t was_read = read(fd, buffer.data(), BUFF_SIZE);
+            if (was_read == -1) {
+                return {-1, ""};
+            }
+            result += was_read;
+            buffer.resize(static_cast<size_t>(was_read));
+            buffer.push_back('\0');
+            cur = std::string(buffer.data());
+            if (cur.empty()) {
+                break;
+            }
+            insert(cur);
+        }
+        return {result, res};
+    }
+
+  private:
+    std::string data;
+};
+
 struct fifo {
     fifo(std::string const& bn)
         : basename(bn), pipein(bn + "in"), pipeout(bn + "out") {
@@ -63,28 +110,35 @@ struct fifo {
         return true;
     }
 
-    std::string first_responce() { return pipein + "\r\n" + pipeout; }
+    std::string first_responce() { return pipein + "||" + pipeout + "\r\n"; }
 
     bool read(std::vector<char>& buffer, size_t const BUFFER_SIZE) {
-        ssize_t was_read = ::read(outfd.get_fd(), buffer.data(), BUFFER_SIZE);
-        if (was_read == -1) {
+        auto got = acc.read_fully(outfd.get_fd(), BUFFER_SIZE);
+        if (got.first == -1) {
             return false;
         }
-        buffer.resize(static_cast<size_t>(was_read));
+        buffer.resize(got.second.size());
+        std::copy(got.second.begin(), got.second.end(), buffer.begin());
         return true;
     }
 
-    bool write(std::vector<char>& buffer) {
-        ssize_t was_written =
-            ::write(infd.get_fd(), buffer.data(), buffer.size());
-        if (was_written == -1) {
-            return false;
+    bool write(std::vector<char> buffer) {
+        buffer.push_back('\r');
+        buffer.push_back('\n');
+        size_t was_written = 0;
+        while (was_written < buffer.size()) {
+            ssize_t current =
+                ::write(infd.get_fd(), buffer.data() + was_written,
+                        buffer.size() - was_written);
+            if (current == -1) {
+                return false;
+            }
+            was_written += static_cast<size_t>(current);
         }
-        buffer.resize(static_cast<size_t>(was_written));
         return true;
     }
 
-    bool check_end(std::vector<char>& buffer) {
+    bool check_end(std::vector<char> buffer) {
         buffer.push_back('\0');
         if (strcmp(buffer.data(), "disconnect") == 0 || buffer.size() == 1) {
             return true;
@@ -106,6 +160,8 @@ struct fifo {
 
     fd_wrapper infd;
     fd_wrapper outfd;
+
+    accumulator acc;
 };
 
 #endif // MY_UTILS

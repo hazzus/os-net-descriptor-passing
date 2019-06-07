@@ -21,7 +21,7 @@ struct client_exception : std::runtime_error {
 struct client {
     client(std::string const& path);
 
-    std::string request(std::string const& data);
+    std::string request(std::string data);
 
     ~client();
 
