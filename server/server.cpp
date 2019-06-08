@@ -22,11 +22,37 @@ server::server(std::string const& path)
     }
 }
 
+void work_client(struct fifo* fifo) {
+    while (true) {
+        std::vector<char> buffer(server::BUFFER_SIZE);
+        if (!fifo->read(buffer, server::BUFFER_SIZE)) {
+            delete fifo;
+            throw server_exception("Error on recieving");
+        }
+        if (fifo->check_end(buffer)) {
+            delete fifo;
+            break;
+        }
+        if (!fifo->write(buffer)) {
+            delete fifo;
+            throw server_exception("Error on sending");
+        }
+    }
+}
+
 [[noreturn]] void server::run() {
     std::random_device rd;
     std::uniform_int_distribution<uint64_t> dist;
     std::vector<std::future<void>> tasks;
     while (true) {
+        // this is very shitty multithreading
+        while (tasks.size() >= CONNS) {
+            tasks.erase(std::remove_if(
+                tasks.begin(), tasks.end(), [](std::future<void> const& x) {
+                    return x.wait_for(std::chrono::seconds(0)) ==
+                           std::future_status::ready;
+                }));
+        }
         sockaddr_un client;
         socklen_t clt_size;
 
@@ -37,9 +63,9 @@ server::server(std::string const& path)
             throw server_exception("Failed to establish connection");
         }
 
-        fifo fifo("/tmp/fifo_" + std::to_string(dist(rd)));
+        fifo* f = new fifo("/tmp/fifo_" + std::to_string(dist(rd)));
 
-        auto first_responce = fifo.first_responce();
+        auto first_responce = f->first_responce();
         size_t was_sent = 0;
         while (was_sent < first_responce.size()) {
             ssize_t current =
@@ -50,22 +76,10 @@ server::server(std::string const& path)
             }
             was_sent += static_cast<size_t>(current);
         }
-        if (!fifo.generate_fds()) {
+        if (!f->generate_fds()) {
             throw server_exception("Failed to create pipe");
         }
-
-        while (true) {
-            std::vector<char> buffer(BUFFER_SIZE);
-            if (!fifo.read(buffer, BUFFER_SIZE)) {
-                throw server_exception("Error on recieving");
-            }
-            if (fifo.check_end(buffer)) {
-                break;
-            }
-            if (!fifo.write(buffer)) {
-                throw server_exception("Error on sending");
-            }
-        }
+        tasks.push_back(std::async(std::launch::async, work_client, f));
     }
 }
 

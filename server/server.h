@@ -1,6 +1,7 @@
 #ifndef MY_SERVER
 #define MY_SERVER
 
+#include <algorithm>
 #include <future>
 #include <random>
 #include <stdexcept>
@@ -33,7 +34,7 @@ struct server {
     const std::string path;
     fd_wrapper socket_fd;
 
-    static constexpr size_t CONNS = 5;
+    static constexpr size_t CONNS = 4;
 };
 
 #endif
