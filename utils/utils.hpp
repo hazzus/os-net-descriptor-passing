@@ -110,7 +110,7 @@ struct fifo {
         return true;
     }
 
-    std::string first_responce() { return pipein + "||" + pipeout + "\r\n"; }
+    std::string first_responce() { return pipein + "\r\n" + pipeout + "\r\n"; }
 
     bool read(std::vector<char>& buffer, size_t const BUFFER_SIZE) {
         auto got = acc.read_fully(outfd.get_fd(), BUFFER_SIZE);

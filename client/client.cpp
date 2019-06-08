@@ -19,14 +19,14 @@ client::client(std::string const& path) {
     }
 
     accumulator acc;
-    auto got = acc.read_fully(socket_fd.get_fd(), BUFFER_SIZE);
-    if (got.first == -1) {
+    auto got_in = acc.read_fully(socket_fd.get_fd(), BUFFER_SIZE);
+    if (got_in.first == -1) {
         throw client_exception("No response on connection");
     }
-    std::size_t limiter = got.second.find("||");
+    auto got_out = acc.next();
 
-    in = std::move(open(got.second.substr(0, limiter).c_str(), O_RDONLY));
-    out = std::move(open(got.second.substr(limiter + 2).c_str(), O_WRONLY));
+    in = std::move(open(got_in.second.c_str(), O_RDONLY));
+    out = std::move(open(got_out.c_str(), O_WRONLY));
     if (in.bad() || out.bad()) {
         throw client_exception("Bad descriptors passed");
     }
