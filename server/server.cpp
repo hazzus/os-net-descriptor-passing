@@ -22,20 +22,29 @@ server::server(std::string const& path)
     }
 }
 
-void work_client(struct fifo* fifo) {
+void work_client(piping_tool* pipe) {
     while (true) {
-        std::vector<char> buffer(server::BUFFER_SIZE);
-        if (!fifo->read(buffer, server::BUFFER_SIZE)) {
-            delete fifo;
-            throw server_exception("Error on recieving");
+        accumulator acc;
+        auto got = acc.read_fully(pipe->in_fd.get_fd(), server::BUFFER_SIZE);
+        if (got.first == -1) {
+            delete pipe;
+            throw server_exception("Error on reading");
         }
-        if (fifo->check_end(buffer)) {
-            delete fifo;
+        if (got.second == "disconnect" || got.first == 0) {
+            delete pipe;
             break;
         }
-        if (!fifo->write(buffer)) {
-            delete fifo;
-            throw server_exception("Error on sending");
+        std::string responce = got.second + "\r\n";
+        size_t was_written = 0;
+        while (was_written < responce.size()) {
+            ssize_t current =
+                write(pipe->out_fd.get_fd(), responce.data() + was_written,
+                      responce.size() - was_written);
+            if (current == -1) {
+                delete pipe;
+                throw server_exception("Error on writing to pipe");
+            }
+            was_written += static_cast<size_t>(current);
         }
     }
 }
@@ -62,24 +71,15 @@ void work_client(struct fifo* fifo) {
         if (client_fd.get_fd() == -1) {
             throw server_exception("Failed to establish connection");
         }
-
-        fifo* f = new fifo("/tmp/fifo_" + std::to_string(dist(rd)));
-
-        auto first_responce = f->first_responce();
-        size_t was_sent = 0;
-        while (was_sent < first_responce.size()) {
-            ssize_t current =
-                send(client_fd.get_fd(), first_responce.data() + was_sent,
-                     first_responce.size() - was_sent, 0);
-            if (current == -1) {
-                throw server_exception("Unable to send first_responce");
-            }
-            was_sent += static_cast<size_t>(current);
-        }
-        if (!f->generate_fds()) {
+        piping_tool* pipe = new piping_tool;
+        if (!pipe->valid()) {
             throw server_exception("Failed to create pipe");
         }
-        tasks.push_back(std::async(std::launch::async, work_client, f));
+        if (sendmsg(client_fd.get_fd(), &(pipe->message), 0) == -1) {
+            throw server_exception("Failed to send descriptors");
+        }
+        pipe->close_tmp();
+        tasks.push_back(std::async(std::launch::async, work_client, pipe));
     }
 }
 

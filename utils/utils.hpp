@@ -89,79 +89,56 @@ struct accumulator {
     std::string data;
 };
 
-struct fifo {
-    fifo(std::string const& bn)
-        : basename(bn), pipein(bn + "in"), pipeout(bn + "out") {
-        status = (mkfifo(pipein.c_str(), S_IRUSR | S_IWUSR | S_IWGRP) == -1) ||
-                 (mkfifo(pipeout.c_str(), S_IRUSR | S_IWUSR | S_IWGRP) == -1);
-    }
-
-    bool valid() { return status != true; }
-
-    bool generate_fds() {
-        if (!valid()) {
-            return false;
+struct piping_tool {
+    piping_tool() {
+        if (pipe(in_pipe) == -1 || pipe(out_pipe) == -1) {
+            status = false;
+            return;
         }
-        infd = std::move(open(pipein.c_str(), O_WRONLY));
-        outfd = std::move(open(pipeout.c_str(), O_RDONLY));
-        if (infd.bad() || outfd.bad()) {
-            return false;
-        }
-        return true;
+        iov[0].iov_base = &c;
+        iov[0].iov_len = sizeof(c);
+        in_fd = fd_wrapper(in_pipe[0]);
+        in_tmp = fd_wrapper(in_pipe[1]);
+        out_fd = fd_wrapper(out_pipe[1]);
+        out_tmp = fd_wrapper(out_pipe[0]);
+        memset(buf, 0, sizeof(buf));
+        hdr = reinterpret_cast<cmsghdr*>(buf);
+        hdr->cmsg_len = CMSG_LEN(sizeof(int[2]));
+        hdr->cmsg_level = SOL_SOCKET;
+        hdr->cmsg_type = SCM_RIGHTS;
+        message.msg_name = nullptr;
+        message.msg_namelen = 0;
+        message.msg_iov = iov;
+        message.msg_iovlen = sizeof(iov) / sizeof(iov[0]);
+        message.msg_control = hdr;
+        message.msg_controllen = CMSG_LEN(sizeof(int[2]));
+        message.msg_flags = 0;
+        fds = reinterpret_cast<int*>(CMSG_DATA(hdr));
+        fds[0] = in_pipe[1];
+        fds[1] = out_pipe[0];
     }
 
-    std::string first_responce() { return pipein + "\r\n" + pipeout + "\r\n"; }
+    bool valid() { return status; }
 
-    bool read(std::vector<char>& buffer, size_t const BUFFER_SIZE) {
-        auto got = acc.read_fully(outfd.get_fd(), BUFFER_SIZE);
-        if (got.first == -1) {
-            return false;
-        }
-        buffer.resize(got.second.size());
-        std::copy(got.second.begin(), got.second.end(), buffer.begin());
-        return true;
+    void close_tmp() {
+        close(in_tmp.get_fd());
+        close(out_tmp.get_fd());
     }
 
-    bool write(std::vector<char> buffer) {
-        buffer.push_back('\r');
-        buffer.push_back('\n');
-        size_t was_written = 0;
-        while (was_written < buffer.size()) {
-            ssize_t current =
-                ::write(infd.get_fd(), buffer.data() + was_written,
-                        buffer.size() - was_written);
-            if (current == -1) {
-                return false;
-            }
-            was_written += static_cast<size_t>(current);
-        }
-        return true;
-    }
+    msghdr message;
 
-    bool check_end(std::vector<char> buffer) {
-        buffer.push_back('\0');
-        if (strcmp(buffer.data(), "disconnect") == 0 || buffer.size() == 1) {
-            return true;
-        }
-        return false;
-    }
+    bool status = true;
 
-    ~fifo() {
-        unlink(pipein.c_str());
-        unlink(pipeout.c_str());
-    }
+    cmsghdr* hdr;
+    iovec iov[1];
 
-  private:
-    std::string basename;
-    std::string pipein;
-    std::string pipeout;
+    int* fds;
 
-    bool status;
+    int in_pipe[2], out_pipe[2];
+    fd_wrapper in_fd, in_tmp;
+    fd_wrapper out_fd, out_tmp;
 
-    fd_wrapper infd;
-    fd_wrapper outfd;
-
-    accumulator acc;
+    char buf[CMSG_SPACE(sizeof(int[2]))], c = '*';
 };
 
 #endif // MY_UTILS

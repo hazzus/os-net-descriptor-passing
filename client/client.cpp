@@ -18,18 +18,12 @@ client::client(std::string const& path) {
         throw client_exception("Unable to connect to server");
     }
 
-    accumulator acc;
-    auto got_in = acc.read_fully(socket_fd.get_fd(), BUFFER_SIZE);
-    if (got_in.first == -1) {
-        throw client_exception("No response on connection");
+    piping_tool pipe;
+    if (recvmsg(socket_fd.get_fd(), &pipe.message, 0) == -1) {
+        throw client_exception("Cannot get file descriptors");
     }
-    auto got_out = acc.next();
-
-    in = std::move(open(got_in.second.c_str(), O_RDONLY));
-    out = std::move(open(got_out.c_str(), O_WRONLY));
-    if (in.bad() || out.bad()) {
-        throw client_exception("Bad descriptors passed");
-    }
+    out = fd_wrapper(pipe.fds[0]);
+    in = fd_wrapper(pipe.fds[1]);
 }
 
 std::string client::request(std::string data) {
